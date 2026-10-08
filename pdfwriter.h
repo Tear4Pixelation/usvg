@@ -73,6 +73,8 @@ public:
   ExtraState& extraState() { return extraStates.back(); }
   int compressionLevel = 2;
   bool anyHref = false;
+  // as Painter::setDarkBackdrop(): comp-op multiply is written as /Screen while set
+  bool darkBackdrop = false;
 
   PdfWriter(int npages);
   void drawNode(const SvgNode* node);
@@ -80,6 +82,9 @@ public:
   void write(std::ostream& out);
 
   std::function<SvgNode*(const char*, int*)> resolveLink;
+  // optional: a comp-op for a node that has none of its own (as an SvgNode ext's applyStyle() may set one
+  //  when drawing); return -1 for none
+  std::function<int(const SvgNode*)> defaultCompOp;
 
   //enum { DEFAULT_WIDTH = 612, DEFAULT_HEIGHT = 792 };  8.5x11in
   static const char* FONTS[];
@@ -99,6 +104,7 @@ private:
   void setFillColor(const Color& c);
   void setStrokeColor(const Color& c);
   void applyStyle(const SvgNode* node);
+  void writeCompOp(int op);
 
   void draw(const SvgNode* node);
   void _draw(const SvgDocument* node);

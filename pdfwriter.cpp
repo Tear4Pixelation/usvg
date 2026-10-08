@@ -168,6 +168,10 @@ void PdfWriter::write(std::ostream& out)
     out << fstring("  /GS%d <</ca %f>>\n", i, i/15.0);  // fill alpha
     out << fstring("  /GS%d <</CA %f>>\n", i+16, i/15.0);  // stroke alpha
   }
+  // blend modes for comp-op (applyStyle())
+  out << "  /GSNormal <</BM /Normal>>\n";
+  out << "  /GSMultiply <</BM /Multiply>>\n";
+  out << "  /GSScreen <</BM /Screen>>\n";
   out << "  >>\n";
   // end resources
   out << ">>\nendobj\n\n";
@@ -426,6 +430,17 @@ void PdfWriter::setStrokeColor(const Color& c)
     writef("%.3f %.3f %.3f RG", c.red()/255.0f, c.green()/255.0f, c.blue()/255.0f);
 }
 
+// only the blend modes PDF and the painter share; the graphics state is scoped by draw()'s q/Q
+void PdfWriter::writeCompOp(int op)
+{
+  if(op == Painter::CompOp_Multiply)
+    writef(darkBackdrop ? "/GSScreen gs" : "/GSMultiply gs");
+  else if(op == Painter::CompOp_Screen)
+    writef("/GSScreen gs");
+  else if(op == Painter::CompOp_SrcOver)
+    writef("/GSNormal gs");
+}
+
 void PdfWriter::applyStyle(const SvgNode* node)
 {
   ExtraState& state = extraState();
@@ -522,10 +537,15 @@ void PdfWriter::applyStyle(const SvgNode* node)
     //case SvgAttr::OPACITY:  p->setOpacity(attr.floatVal() * p->opacity());
     //case SvgAttr::SHAPE_RENDERING:  p->setAntiAlias(attr.intVal() != SvgStyle::NoAntialias);
     //case SvgAttr::TEXT_ANCHOR:  extraState().textAnchor = attr.intVal();
-    //case SvgAttr::COMP_OP:  p->setCompositionMode(Painter::CompositionMode(attr.intVal()));
+    case SvgAttr::COMP_OP:  writeCompOp(attr.intVal());  break;
     case SvgAttr::COLOR:  state.currentColor = attr.colorVal();  break;
     default:  break;
     }
+  }
+  if(defaultCompOp && !node->getAttr("comp-op")) {
+    int op = defaultCompOp(node);
+    if(op >= 0)
+      writeCompOp(op);
   }
 
   //if(node->m_ext)
