@@ -80,7 +80,14 @@ class XmlStreamWriter
     const unsigned char* table = escapeTable();
     for(;;) {
       const char* start = s;
-      while(*s && !(table[(unsigned char)*s] & mask)) ++s;
+      // unrolled like pugi's PUGI__SCANWHILE_UNROLL; '\0' is special for both masks, so this stops at the end
+      for(;;) {
+        if(table[(unsigned char)s[0]] & mask) break;
+        if(table[(unsigned char)s[1]] & mask) { s += 1; break; }
+        if(table[(unsigned char)s[2]] & mask) { s += 2; break; }
+        if(table[(unsigned char)s[3]] & mask) { s += 3; break; }
+        s += 4;
+      }
       buf.append(start, s - start);
       if(!*s) break;
       switch(*s) {
