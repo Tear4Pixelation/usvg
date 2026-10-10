@@ -301,11 +301,16 @@ void SvgWriter::_serialize(SvgImage* node)
 
   // m_linkStr will be empty iff image successfully loaded from inline base64
   if(node->m_linkStr.empty()) {
-    Image cropped(0, 0);
-    bool crop = node->srcRect.isValid() && node->srcRect != Rect::wh(node->m_image.width, node->m_image.height);
-    if(crop)
-      cropped = node->m_image.cropped(node->srcRect);
-    const Image& img = crop ? cropped : node->m_image;
+    const Image& srcimg = node->m_image;
+    bool crop = node->srcRect.isValid() && node->srcRect != Rect::wh(srcimg.width, srcimg.height);
+    // size of the image to write, without decoding it to crop (as Image::cropped() works it out)
+    int imgw = srcimg.width, imgh = srcimg.height;
+    if(crop) {
+      imgw = std::min(int(node->srcRect.right), srcimg.width) - int(node->srcRect.left);
+      imgh = std::min(int(node->srcRect.bottom), srcimg.height) - int(node->srcRect.top);
+      if(imgw <= 0 || imgh <= 0)
+        imgw = imgh = 0;
+    }
 
     Transform2D tf = node->totalTransform();
     Rect tf_bounds = tf.mapRect(node->viewport());
@@ -313,10 +318,34 @@ void SvgWriter::_serialize(SvgImage* node)
     int scaledh = int(saveImageScaled*tf_bounds.height() + 0.5);
     // shrink image to save space if sufficient size change (and new size is not tiny)
     bool scaleimg = saveImageScaled > 0 && tf_bounds.width() > 10 && tf_bounds.height() > 10
-        && (scaledw < 0.75*img.width || scaledh < 0.75*img.height);
-    // compress image
-    Image::Encoding fmt = img.encoding == Image::JPEG && !img.hasTransparency() ? Image::JPEG : Image::PNG;
-    auto buff = scaleimg ? img.scaled(scaledw, scaledh).encode(fmt) : img.encode(fmt);
+        && (scaledw < 0.75*imgw || scaledh < 0.75*imgh);
+    Image::Encoding fmt;
+    Image::EncodeBuff buff;
+    // a crop or a rescale makes new pixels to encode: reuse the last save's bytes if nothing has changed
+    SvgImage::SaveCache& cache = node->saveCache;
+    int cachew = scaleimg ? scaledw : -1, cacheh = scaleimg ? scaledh : -1;
+    if((crop || scaleimg) && cache.contentId == srcimg.contentId && cache.srcRect == node->srcRect
+        && cache.width == cachew && cache.height == cacheh) {
+      fmt = cache.fmt;
+      buff = cache.data;
+    }
+    else {
+      Image cropped(0, 0);
+      if(crop)
+        cropped = srcimg.cropped(node->srcRect);
+      const Image& img = crop ? cropped : srcimg;
+      // compress image
+      fmt = img.encoding == Image::JPEG && !img.hasTransparency() ? Image::JPEG : Image::PNG;
+      buff = scaleimg ? img.scaled(scaledw, scaledh).encode(fmt) : img.encode(fmt);
+      if(crop || scaleimg) {
+        cache.contentId = srcimg.contentId;
+        cache.srcRect = node->srcRect;
+        cache.width = cachew;
+        cache.height = cacheh;
+        cache.fmt = fmt;
+        cache.data = buff;
+      }
+    }
 
     std::string prefix = std::string("data:image/") + (fmt == Image::JPEG ? "jpeg" : "png") + ";base64,";
     size_t base64len = base64_enclen(buff.size()) + prefix.size() + 1;  // account for \0 terminator
