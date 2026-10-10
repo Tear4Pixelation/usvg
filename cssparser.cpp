@@ -190,6 +190,11 @@ void css_element_selector::parse( const std::string& txt )
     }
     el_end = txt.find_first_of(".#[:", el_end);
   }
+  m_anyTag = m_tag.empty() || m_tag == "*";
+  for(css_attribute_selector& attr : m_attrs) {
+    attr.kind = attr.attribute == "class" ? css_attribute_selector::CLASS
+        : attr.attribute == "id" ? css_attribute_selector::ID : css_attribute_selector::OTHER;
+  }
 }
 
 bool css_selector::parse( const std::string& text )
@@ -275,6 +280,8 @@ void css_stylesheet::parse_stylesheet(const char* str)  //, const char* baseurl)
     c_start = text.find("/*");
   }
 
+  // new rules are not in the index (and sort_rules() has to run again anyway)
+  m_indexValid = false;
   size_t pos = text.find_first_not_of(" \n\r\t");
   while(pos != std::string::npos) {
     /*while(pos != tstring::npos && text[pos] == '@')
@@ -316,6 +323,55 @@ void css_stylesheet::sort_rules()
   std::sort(m_rules.begin(), m_rules.end(), [](const css_rule& v1, const css_rule& v2) {
     return (v1.m_specificity == v2.m_specificity) ? (v1.m_order > v2.m_order) : (v1.m_specificity > v2.m_specificity);
   });
+  build_rule_index();
+}
+
+// Only requirements element_select() itself enforces may be used as keys, and with the same test:
+//  a class or id condition is select_equal on kind CLASS/ID, matched by hasClass()/hasId().  An empty
+//  class never matches (findWord) and an empty id matches an element without one, so rules keyed by
+//  either go to `always` - that is safe, just untested by the index, and does not occur in practice.
+void css_stylesheet::build_rule_index()
+{
+  m_byClass.clear();
+  m_byId.clear();
+  m_byTag.clear();
+  m_always.clear();
+  // how many rules require each class, to file each rule under its rarest one (smallest bucket)
+  std::unordered_map<std::string, int> classCount;
+  for(const css_rule& rule : m_rules) {
+    for(const css_attribute_selector& attr : rule.m_selector->m_right.m_attrs) {
+      if(attr.condition == select_equal && attr.kind == css_attribute_selector::CLASS && !attr.val.empty())
+        ++classCount[attr.val];
+    }
+  }
+  for(int ii = 0; ii < int(m_rules.size()); ++ii) {
+    const css_element_selector& right = m_rules[ii].m_selector->m_right;
+    const std::string* idKey = nullptr;
+    const std::string* classKey = nullptr;
+    int classKeyCount = 0;
+    for(const css_attribute_selector& attr : right.m_attrs) {
+      if(attr.condition != select_equal || attr.val.empty())
+        continue;
+      if(attr.kind == css_attribute_selector::ID && !idKey)
+        idKey = &attr.val;
+      else if(attr.kind == css_attribute_selector::CLASS) {
+        int count = classCount[attr.val];
+        if(!classKey || count < classKeyCount) {
+          classKey = &attr.val;
+          classKeyCount = count;
+        }
+      }
+    }
+    if(idKey)
+      m_byId[*idKey].push_back(ii);
+    else if(classKey)
+      m_byClass[*classKey].push_back(ii);
+    else if(!right.m_anyTag)
+      m_byTag[right.m_tag].push_back(ii);
+    else
+      m_always.push_back(ii);
+  }
+  m_indexValid = true;
 }
 
 /// css_rule ///
@@ -338,14 +394,14 @@ void css_rule::parse_declarations(const std::string& stylestr)
 
 bool css_rule::element_select(void* el, const css_element_selector& selector) const
 {
-  if(!selector.m_tag.empty() && selector.m_tag != "*" && !m_decls->isTag(el, selector.m_tag.c_str()))
+  if(!selector.m_anyTag && !m_decls->isTag(el, selector.m_tag.c_str()))
     return false;
 
   for(auto i = selector.m_attrs.begin(); i != selector.m_attrs.end(); i++) {
-    if(i->condition == select_equal && i->attribute == "class") {
+    if(i->condition == select_equal && i->kind == css_attribute_selector::CLASS) {
       if(!m_decls->hasClass(el, i->val.c_str()))
         return false;
-    } else if(i->condition == select_equal && i->attribute == "id") {
+    } else if(i->condition == select_equal && i->kind == css_attribute_selector::ID) {
       if(!m_decls->hasId(el, i->val.c_str()))
         return false;
     } else {

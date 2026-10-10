@@ -1,5 +1,7 @@
 #include "svgstyleparser.h"
 #include "svgparser.h"
+#include <algorithm>
+#include <string.h>
 
 static real clamp(real val, real min, real max) { return std::max(min, std::min(val, max)); }
 
@@ -193,10 +195,54 @@ void SvgCssDecls::parseDecl(const char* name, const char* value)
 
 css_declarations* SvgCssStylesheet::createCssDecls() { return new SvgCssDecls; }
 
+// Indices of the rules that can match node, ascending (= rules() order, high to low priority): the
+//  buckets of each of its classes, its id and its tag, plus the rules that require none of those.  See
+//  css_stylesheet::build_rule_index().  Classes are split exactly as SvgNode::hasClass() (findWord) sees
+//  them: on ' ', empty words ignored.
+static void gatherCandidateRules(const css_stylesheet& sheet, const SvgNode* node, std::vector<int>& out)
+{
+  auto append = [&out](const std::vector<int>* bucket) {
+    if(bucket) out.insert(out.end(), bucket->begin(), bucket->end());
+  };
+  const std::vector<int>& always = sheet.rules_always();
+  out.assign(always.begin(), always.end());
+  std::string word;
+  for(const char* p = node->xmlClass(); *p;) {
+    const char* end = strchr(p, ' ');
+    if(!end) end = p + strlen(p);
+    if(end > p) {
+      word.assign(p, end - p);
+      append(sheet.rules_for_class(word));
+    }
+    p = *end ? end + 1 : end;
+  }
+  const char* id = node->xmlId();
+  if(id[0]) {
+    word.assign(id);
+    append(sheet.rules_for_id(word));
+  }
+  word.assign(SvgNode::nodeNames[node->type()]);
+  append(sheet.rules_for_tag(word));
+  std::sort(out.begin(), out.end());
+  // a class listed twice in the class attribute adds its bucket twice
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+}
+
 void SvgCssStylesheet::applyStyle(SvgNode* node) const
 {
   std::vector<SvgAttr> varAttrs;
-  for(const css_rule& rule : rules()) {
+  // Testing every rule against every node was ~85% of restyle time; the index narrows it to the few that
+  //  can match.  Candidates are visited in rules() order, so setAttr() sees the same sequence as before.
+  std::vector<int> candidates;
+  if(has_rule_index())
+    gatherCandidateRules(*this, node, candidates);
+  else {
+    candidates.resize(rules().size());
+    for(int ii = 0; ii < int(candidates.size()); ++ii)
+      candidates[ii] = ii;
+  }
+  for(int ruleIdx : candidates) {
+    const css_rule& rule = rules()[ruleIdx];
     if(rule.select(node)) {
       for(const SvgAttr& attr : ((const SvgCssDecls*)rule.decls())->attrs) {
         if(attr.getFlags() & SvgAttr::Variable) {

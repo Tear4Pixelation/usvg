@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <unordered_map>
 
 enum attr_select_condition
 {
@@ -20,10 +21,15 @@ enum attr_select_condition
 
 struct css_attribute_selector
 {
+  // which of the attributes element_select() special-cases, resolved from `attribute` once at parse time
+  //  instead of comparing strings for every rule tested against every node
+  enum Kind { OTHER, CLASS, ID };
+
   std::string attribute;
   std::string val;
   //std::vector<std::string>    class_val;
   attr_select_condition condition = select_exists;
+  Kind kind = OTHER;
 };
 
 class css_element_selector
@@ -31,6 +37,7 @@ class css_element_selector
 public:
   std::string m_tag;
   std::vector<css_attribute_selector> m_attrs;
+  bool m_anyTag = true;  // m_tag empty or "*", set by parse()
   void parse(const std::string& txt);
 };
 
@@ -91,8 +98,32 @@ public:
   void parse_stylesheet(const char* str);  //, const char* baseurl);
   void sort_rules();
 
+  // Rule index, built by sort_rules().  Every rule is filed under one thing its rightmost compound
+  //  selector requires - an id, else its rarest class, else its tag - or under `always` if it requires
+  //  none of those.  A rule can then only match an element if it is in the bucket of one of the
+  //  element's classes, its id or its tag, or in `always`.  The index only narrows which rules are
+  //  tested: callers gather the candidate indices, sort them and still run css_rule::select() on each,
+  //  in rules() order, so the cascade is exactly what testing every rule gives.
+  bool has_rule_index() const { return m_indexValid; }
+  const std::vector<int>* rules_for_class(const std::string& cls) const { return lookup(m_byClass, cls); }
+  const std::vector<int>* rules_for_id(const std::string& id) const { return lookup(m_byId, id); }
+  const std::vector<int>* rules_for_tag(const std::string& tag) const { return lookup(m_byTag, tag); }
+  const std::vector<int>& rules_always() const { return m_always; }
+
 private:
+  typedef std::unordered_map<std::string, std::vector<int>> RuleBuckets;
+
   std::vector<css_rule> m_rules;
+  RuleBuckets m_byClass, m_byId, m_byTag;
+  std::vector<int> m_always;
+  bool m_indexValid = false;
+
+  static const std::vector<int>* lookup(const RuleBuckets& buckets, const std::string& key)
+  {
+    auto it = buckets.find(key);
+    return it == buckets.end() ? nullptr : &it->second;
+  }
+  void build_rule_index();
 
   void parse_selectors(const std::string& txt, const std::string& styles);
 };
