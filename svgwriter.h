@@ -11,6 +11,10 @@ public:
   float saveImageScaled = DEFAULT_SAVE_IMAGE_SCALED;
   bool pathDataRel = DEFAULT_PATH_DATA_REL;
   std::vector<SvgNode*> tempNodes;
+  // attributes an extension's serializeAttr() wants written without keeping them on the node: each is
+  //  written just before the node's attribute at that index of node->attrs, or after the last XML
+  //  attribute if there is none at that index; written and cleared along with that node's attributes
+  std::vector<std::pair<size_t, SvgAttr>> extraAttrs;
 
   SvgWriter(XmlStreamWriter& _xml) : xml(_xml) {}
   ~SvgWriter();
