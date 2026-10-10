@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstring>
 #include <memory>
 #include <list>
 #include <unordered_map>
@@ -537,7 +538,12 @@ public:
   void addText(const char* text);
   bool isLineBreak() const { return m_text == "\n"; }
   void clearText();
-  void setText(const char* text) { clearText(); addText(text); }
+  // a single-run text already holding exactly this is left alone: rewriting it only invalidates (UI labels
+  //  are re-set to the same string on every refresh).  Multi-run or multi-line text takes the full path.
+  void setText(const char* text) {
+    if(tspans().empty() && m_text == text && !strchr(text, '\n')) return;
+    clearText(); addText(text);
+  }
   std::string text() const;
   std::string displayText() const;
   bool isTspan() const { return m_isTspan; }
