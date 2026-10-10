@@ -191,8 +191,15 @@ void SvgWriter::serializeNodeAttr(SvgNode* node)
     node->ext()->serializeAttr(this);
 
   auto it = node->attrs.begin();
-  for(; it != node->attrs.end() && it->src() == SvgAttr::XMLSrc; ++it)
+  auto extra = extraAttrs.begin();
+  for(size_t idx = 0; it != node->attrs.end() && it->src() == SvgAttr::XMLSrc; ++it, ++idx) {
+    for(; extra != extraAttrs.end() && extra->first <= idx; ++extra)
+      writeAttribute(extra->second);
     writeAttribute(*it);
+  }
+  for(; extra != extraAttrs.end(); ++extra)
+    writeAttribute(extra->second);
+  extraAttrs.clear();
   xml.startStyleAttribute();
   for(; it != node->attrs.end() && it->src() == SvgAttr::InlineStyleSrc; ++it)
     writeAttribute(*it);
