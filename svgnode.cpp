@@ -11,21 +11,33 @@ real SvgLength::defaultDpi = 96;
 //  e.g. case SVG_ATTR("fill"):  but I'm not sure the extra complication is worthwhile
 SvgAttr::StdAttr SvgAttr::nameToStdAttr(const char* name)
 {
-  static std::unordered_map<std::string, StdAttr> stdAttrMap = {
+  // sorted by name for binary search: no std::string is built per lookup (this runs for every attribute
+  //  parsed and every setAttr<T>(name, ...) call)
+  struct NameId { const char* name; StdAttr id; };
+  static const NameId stdAttrs[] = {
     {"color", COLOR}, {"comp-op", COMP_OP}, {"display", DISPLAY}, {"fill", FILL}, {"fill-opacity", FILL_OPACITY},
     {"fill-rule", FILL_RULE}, {"font-family", FONT_FAMILY}, {"font-size", FONT_SIZE},
     {"font-style", FONT_STYLE}, {"font-variant", FONT_VARIANT}, {"font-weight", FONT_WEIGHT},
-    {"offset", OFFSET}, {"opacity", OPACITY}, {"shape-rendering", SHAPE_RENDERING}, {"stop-color", STOP_COLOR},
-    {"stop-opacity", STOP_OPACITY}, {"stroke", STROKE}, {"stroke-dasharray", STROKE_DASHARRAY},
+    {"letter-spacing", LETTER_SPACING}, {"offset", OFFSET}, {"opacity", OPACITY},
+    {"shape-rendering", SHAPE_RENDERING}, {"stop-color", STOP_COLOR}, {"stop-opacity", STOP_OPACITY},
+    {"stroke", STROKE}, {"stroke-alignment", STROKE_ALIGNMENT}, {"stroke-dasharray", STROKE_DASHARRAY},
     {"stroke-dashoffset", STROKE_DASHOFFSET}, {"stroke-linecap", STROKE_LINECAP},
     {"stroke-linejoin", STROKE_LINEJOIN}, {"stroke-miterlimit", STROKE_MITERLIMIT},
     {"stroke-opacity", STROKE_OPACITY}, {"stroke-width", STROKE_WIDTH}, {"text-anchor", TEXT_ANCHOR},
-    {"vector-effect", VECTOR_EFFECT}, {"visibility", VISIBILITY}, {"letter-spacing", LETTER_SPACING},
-    {"stroke-alignment", STROKE_ALIGNMENT}
+    {"vector-effect", VECTOR_EFFECT}, {"visibility", VISIBILITY}
   };
-
-  auto it = stdAttrMap.find(name);
-  return it != stdAttrMap.end() ? it->second : UNKNOWN;
+  size_t lo = 0, hi = sizeof(stdAttrs)/sizeof(stdAttrs[0]);
+  while(lo < hi) {
+    size_t mid = (lo + hi)/2;
+    int cmp = strcmp(name, stdAttrs[mid].name);
+    if(cmp == 0)
+      return stdAttrs[mid].id;
+    if(cmp < 0)
+      hi = mid;
+    else
+      lo = mid + 1;
+  }
+  return UNKNOWN;
 }
 
 bool SvgAttr::nameIs(const char* s) const { return strcmp(name(), s) == 0; }
@@ -333,16 +345,19 @@ void SvgNode::onAttrChange(const char* name, SvgAttr::StdAttr stdattr)
     ext()->onAttrChange(name);
 }
 
-static bool replaceAttr(SvgAttr& dest, const SvgAttr& src)
+template<class Attr>
+static bool replaceAttr(SvgAttr& dest, Attr&& src)
 {
   dest.setStale(false);
   if(dest == src)
      return false;
-  dest = src;
+  dest = std::forward<Attr>(src);
   return true;
 }
 
-bool SvgNode::setAttrHelper(const SvgAttr& attr)
+// Attr is const SvgAttr& or SvgAttr (moved from) - attr is only read before it is stored
+template<class Attr>
+bool SvgNode::setAttrHelper(Attr&& attr)
 {
   // Attrs are stored in the following order: XMLSrc, InlineStyleSrc, CSSSrc
   // if inline style (style=) src, insert before first CSS attr and remove any CSS w/ same name
@@ -351,13 +366,13 @@ bool SvgNode::setAttrHelper(const SvgAttr& attr)
   if(attr.src() == SvgAttr::XMLSrc) {
     for(auto it = attrs.begin(); it != attrs.end(); ++it) {
       if(it->nameIs(attr.name()) && it->src() == SvgAttr::XMLSrc)
-        return replaceAttr(*it, attr);
+        return replaceAttr(*it, std::forward<Attr>(attr));
       else if(it->src() != SvgAttr::XMLSrc) {
-        attrs.insert(it, attr);
+        attrs.insert(it, std::forward<Attr>(attr));
         return true;
       }
     }
-    attrs.push_back(attr);
+    attrs.push_back(std::forward<Attr>(attr));
   }
   else if(attr.src() == SvgAttr::CSSSrc) {
     // note reverse order iteration
@@ -365,23 +380,24 @@ bool SvgNode::setAttrHelper(const SvgAttr& attr)
       if(it->nameIs(attr.name())) {  // src is CSS or inline style
         // CSS rules are processed from high to low priority, so we only replace stale attributes
         if(it->src() == SvgAttr::CSSSrc && it->isStale())
-          return replaceAttr(*it, attr);
+          return replaceAttr(*it, std::forward<Attr>(attr));
         return false;  // discard if overridden by inline style
       }
     }
-    attrs.push_back(attr);
+    attrs.push_back(std::forward<Attr>(attr));
   }
   else if(attr.src() == SvgAttr::InlineStyleSrc) {
     auto it = attrs.begin();
     for(; it != attrs.end() && it->src() != SvgAttr::CSSSrc; ++it) {
       if(it->nameIs(attr.name()) && it->src() == SvgAttr::InlineStyleSrc)
-        return replaceAttr(*it, attr);  // if already present as inline style, can't be a CSSSrc version
+        return replaceAttr(*it, std::forward<Attr>(attr));  // if already present as inline style, can't be a CSSSrc version
     }
-    it = attrs.insert(it, attr);
-    // remove CSSSrc attr is present
-    for(++it; it != attrs.end(); ++it) {
-      if(it->nameIs(attr.name()) && it->src() == SvgAttr::CSSSrc) {
-        attrs.erase(it);
+    size_t pos = it - attrs.begin();
+    attrs.insert(it, std::forward<Attr>(attr));
+    // remove CSSSrc attr is present (compare against the stored copy - attr may have been moved from)
+    for(auto jt = attrs.begin() + pos + 1; jt != attrs.end(); ++jt) {
+      if(jt->nameIs(attrs[pos].name()) && jt->src() == SvgAttr::CSSSrc) {
+        attrs.erase(jt);
         break;
       }
     }
@@ -393,6 +409,15 @@ void SvgNode::setAttr(const SvgAttr& attr)
 {
   if(setAttrHelper(attr))
     onAttrChange(attr.name(), attr.stdAttr());
+}
+
+void SvgNode::setAttr(SvgAttr&& attr)
+{
+  // the name is needed after attr is moved into attrs (short names stay in the std::string's own buffer)
+  std::string name(attr.name());
+  SvgAttr::StdAttr stdattr = attr.stdAttr();
+  if(setAttrHelper(std::move(attr)))
+    onAttrChange(name.c_str(), stdattr);
 }
 
 void SvgNode::setAttribute(const char* name, const char* value, SvgAttr::Src src)
