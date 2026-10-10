@@ -449,6 +449,18 @@ public:
   std::string m_linkStr;
 
   Rect srcRect;
+
+  // what SvgWriter last wrote for this image when it had to crop or rescale it (savePicScaled): decoding,
+  //  resampling and re-encoding a big JPEG took seconds per save.  Valid while the key matches - the
+  //  pixels (Image::contentId), the crop and the scaled size; the bytes are exactly what it would write.
+  struct SaveCache {
+    uint64_t contentId = 0;
+    Rect srcRect;
+    int width = 0, height = 0;  // -1: not scaled
+    Image::Encoding fmt = Image::UNKNOWN;
+    Image::EncodeBuff data;
+  };
+  mutable SaveCache saveCache;
 };
 
 class SvgPath : public SvgNode
