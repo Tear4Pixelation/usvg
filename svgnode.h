@@ -185,6 +185,7 @@ public:
   // attributes
   void setAttribute(const char* name, const char* value, SvgAttr::Src src = SvgAttr::XMLSrc);
   void setAttr(const SvgAttr& attr);
+  void setAttr(SvgAttr&& attr);
   template<typename T>
   void setAttr(const char* name, T val, SvgAttr::Src src = SvgAttr::XMLSrc)
     { setAttr(SvgAttr( name, val, src | SvgAttr::nameToStdAttr(name) )); }
@@ -225,7 +226,7 @@ public:
 protected:
   SvgNode(const SvgNode&);
 
-  bool setAttrHelper(const SvgAttr& attr);
+  template<class Attr> bool setAttrHelper(Attr&& attr);
   void onAttrChange(const char* name, SvgAttr::StdAttr stdattr);
 };
 

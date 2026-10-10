@@ -131,7 +131,10 @@ SvgAttr processAttribute(SvgAttr::Src src, const char* name, const char* value)
   SvgAttr::ExFlags inherit = strcmp(value, "inherit") == 0 ? SvgAttr::Inherit : SvgAttr::NoExFlags;
   if(stdattr == SvgAttr::UNKNOWN)
     return SvgAttr(name, value, src | inherit);
-  return processStdAttribute(stdattr, value).setFlags(src | stdattr | inherit);
+  // not `return processStdAttribute(...).setFlags(...)`: that copies from the returned reference
+  SvgAttr attr = processStdAttribute(stdattr, value);
+  attr.setFlags(src | stdattr | inherit);
+  return attr;
 }
 
 bool processAttribute(SvgNode* node, SvgAttr::Src src, const char* name, const char* value)

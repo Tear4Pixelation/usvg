@@ -142,7 +142,7 @@ void SvgWriter::writeAttribute(const SvgAttr& attr)
 
 void SvgWriter::save(SvgNode* node, IOStream& strm, const char* indent)
 {
-  XmlStreamWriter xmlwriter;
+  XmlStreamWriter xmlwriter(strm, indent);
   SvgWriter(xmlwriter).serialize(node);
   xmlwriter.save(strm, indent);
 }

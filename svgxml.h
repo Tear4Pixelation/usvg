@@ -30,30 +30,151 @@ public:
 };
 
 // TODO: remove "write" prefix from each method
+// XmlStreamWriter writes the XML text as the caller visits the tree - no DOM is built.  The output is
+//  byte-identical to what pugixml's doc.save(..., indent, format_default | format_no_declaration) printed
+//  when this class built a pugi::xml_document first (saved documents, sync messages and undo persistence
+//  all depend on that), so the rules below mirror pugi's node_output() exactly:
+//  - an element starts on a new line, indented by its depth, unless it follows text (pugi indent_flags);
+//  - a childless element is closed with " />", one with children with "</name>" on its own line, or right
+//    after its text if text was the last child;
+//  - attribute values escape & < > " and control characters except \t (so \n and \r too); text escapes
+//    & < > and control characters except \t \n \r; a control character becomes &#NN; with two digits;
+//  - a trailing newline follows the last top-level element.
+// All attributes of an element must be written before its first child or text (true of every caller -
+//  pugi allowed otherwise, a stream cannot).  Constructed with an IOStream, output goes straight to it
+//  (in chunks); otherwise it is buffered until save().
 class XmlStreamWriter
 {
-  pugi::xml_document doc;
-  pugi::xml_node node;
+  enum { INDENT_NEWLINE = 1, INDENT_INDENT = 2 };
+  static constexpr size_t FLUSH_SIZE = 1 << 16;
+
+  IOStream* out = NULL;
+  std::string buf;
+  std::string indent = "  ";
+  std::vector<std::string> openNames;
+  bool tagOpen = false;  // start tag of openNames.back() written without its '>' - no children yet
+  int indentFlags = INDENT_INDENT;
 
   bool writeStyleAttr = false;
   std::string styleAttr;
 
   std::vector<char> temp;
 
+  // pugi's chartypex_table: bit 1 = special in text (ctx_special_pcdata), bit 2 = special in attribute
+  static const unsigned char* escapeTable()
+  {
+    static unsigned char table[256] = {0};
+    static bool init = [](){
+      for(int ch = 0; ch < 32; ++ch)
+        table[ch] = (ch == 9 ? 0 : 2) | (ch == 9 || ch == 10 || ch == 13 ? 0 : 1);
+      table[(unsigned char)'&'] = table[(unsigned char)'<'] = table[(unsigned char)'>'] = 3;
+      table[(unsigned char)'"'] = 2;
+      return true;
+    }();
+    (void)init;
+    return table;
+  }
+
+  void writeEscaped(const char* s, unsigned char mask)
+  {
+    const unsigned char* table = escapeTable();
+    for(;;) {
+      const char* start = s;
+      while(*s && !(table[(unsigned char)*s] & mask)) ++s;
+      buf.append(start, s - start);
+      if(!*s) break;
+      switch(*s) {
+      case '&': buf.append("&amp;"); break;
+      case '<': buf.append("&lt;"); break;
+      case '>': buf.append("&gt;"); break;
+      case '"': buf.append("&quot;"); break;
+      default: {
+        unsigned int ch = (unsigned char)*s;
+        char esc[5] = {'&', '#', char('0' + ch/10), char('0' + ch%10), ';'};
+        buf.append(esc, 5);
+      }
+      }
+      ++s;
+    }
+  }
+
+  void writeIndent(size_t depth) { for(size_t ii = 0; ii < depth; ++ii) buf.append(indent); }
+
+  // a child (element, text or fragment) is about to be written to the current element
+  void openChild() { if(tagOpen) { buf.push_back('>'); tagOpen = false; } }
+
+  void maybeFlush() { if(out && buf.size() >= FLUSH_SIZE) { out->write(buf.data(), buf.size()); buf.clear(); } }
+
+  struct StringXMLWriter : public pugi::xml_writer
+  {
+    std::string& str;
+    StringXMLWriter(std::string& _str) : str(_str) {}
+    void write(const void* data, size_t size) override { str.append((const char*)data, size); }
+  };
+
+  void finish()
+  {
+    while(!openNames.empty())
+      writeEndElement();
+    if(indentFlags & INDENT_NEWLINE)
+      buf.push_back('\n');
+    indentFlags = 0;  // so a second save() adds nothing more
+  }
+
 public:
   int defaultFloatPrecision = 3;
 
-  XmlStreamWriter() : temp(1024) { node = doc; }
+  XmlStreamWriter() : temp(1024) {}
+  // stream output straight to strm; indent must be the one save() would have been given
+  explicit XmlStreamWriter(IOStream& strm, const char* _indent = "  ") : out(&strm), indent(_indent), temp(1024) {}
 
-  XmlStreamWriter& writeStartElement(const char* name) { node = node.append_child(name); return *this; }
-  XmlStreamWriter& writeEndElement() { node = node.parent();  return *this; }
+  XmlStreamWriter& writeStartElement(const char* name)
+  {
+    openChild();
+    if(indentFlags & INDENT_NEWLINE) buf.push_back('\n');
+    if(indentFlags & INDENT_INDENT) writeIndent(openNames.size());
+    buf.push_back('<');
+    buf.append(name);
+    openNames.emplace_back(name);
+    tagOpen = true;
+    indentFlags = INDENT_NEWLINE | INDENT_INDENT;
+    return *this;
+  }
+
+  XmlStreamWriter& writeEndElement()
+  {
+    if(openNames.empty()) return *this;
+    if(tagOpen) {
+      buf.append(" />");
+      tagOpen = false;
+    }
+    else {
+      if(indentFlags & INDENT_NEWLINE) buf.push_back('\n');
+      if(indentFlags & INDENT_INDENT) writeIndent(openNames.size() - 1);
+      buf.append("</");
+      buf.append(openNames.back());
+      buf.push_back('>');
+    }
+    openNames.pop_back();
+    indentFlags = INDENT_NEWLINE | INDENT_INDENT;
+    maybeFlush();
+    return *this;
+  }
+
   XmlStreamWriter& writeAttribute(const char* name, const char* value)
   {
     if(writeStyleAttr) {
       styleAttr.append(name); styleAttr.append(":"); styleAttr.append(value); styleAttr.append(";");
     }
-    else
-      node.append_attribute(name).set_value(value);
+    else {
+      ASSERT(tagOpen && "XmlStreamWriter: attribute written after the element's first child");
+      if(!tagOpen) return *this;
+      buf.push_back(' ');
+      buf.append(name);
+      buf.append("=\"");
+      writeEscaped(value, 2);
+      buf.push_back('"');
+    }
     return *this;
   }
 
@@ -84,13 +205,37 @@ public:
 
   XmlStreamWriter& writeCharacters(const char* text)
   {
-    node.append_child(pugi::node_pcdata).set_value(text);
+    openChild();
+    writeEscaped(text, 1);
+    indentFlags = 0;
+    maybeFlush();
     return *this;
   }
 
   XmlStreamWriter& writeFragment(const XmlFragment& fragment)
   {
-    node.append_copy(fragment.doc.first_child());
+    pugi::xml_node node = fragment.doc.first_child();
+    if(!node) return *this;  // appending a null copy added nothing
+    openChild();
+    // pugi prints a lone node with its own indent first and a newline after; inline, the newline comes
+    //  before it instead and the indent only when the preceding sibling was not text
+    std::string str;
+    StringXMLWriter writer(str);
+    size_t depth = openNames.size();
+    node.print(writer, indent.c_str(), pugi::format_default, pugi::encoding_auto, depth);
+    if(node.type() == pugi::node_pcdata || node.type() == pugi::node_cdata) {
+      buf.append(str);
+      indentFlags = 0;
+    }
+    else {
+      size_t skip = std::min(str.size(), indent.size()*depth);
+      if(!str.empty() && str.back() == '\n') str.pop_back();
+      if(indentFlags & INDENT_NEWLINE) buf.push_back('\n');
+      if(indentFlags & INDENT_INDENT) buf.append(str);
+      else buf.append(str, skip, std::string::npos);
+      indentFlags = INDENT_NEWLINE | INDENT_INDENT;
+    }
+    maybeFlush();
     return *this;
   }
 
@@ -105,21 +250,26 @@ public:
   }
 
   char* getTemp(size_t reserve = 0) { if(reserve > temp.size()) { temp.resize(reserve); } return temp.data(); }
-  void saveFile(const char* filename, const char* indent = "  ")
+  void saveFile(const char* filename, const char* _indent = "  ")
   {
     FileStream strm(filename, "wb");
-    save(strm, indent);  // let FileStream handle unicode on Windows instead of using pugi save_file wstring
+    save(strm, _indent);  // let FileStream handle unicode on Windows instead of using pugi save_file wstring
   }
 
-  void save(std::ostream& strm, const char* indent = "  ")
+  void save(std::ostream& strm, const char* _indent = "  ")
   {
-    doc.save(strm, indent, pugi::format_default | pugi::format_no_declaration);
+    ASSERT(!out && indent == _indent && "XmlStreamWriter: indent is fixed when the writer is constructed");
+    finish();
+    strm.write(buf.data(), buf.size());
   }
 
-  void save(IOStream& strm, const char* indent = "  ")
+  void save(IOStream& strm, const char* _indent = "  ")
   {
-    PugiXMLWriter writer(strm);
-    doc.save(writer, indent, pugi::format_default | pugi::format_no_declaration);
+    ASSERT((!out || out == &strm) && indent == _indent && "XmlStreamWriter: indent is fixed when the writer is constructed");
+    finish();
+    strm.write(buf.data(), buf.size());
+    if(out)
+      buf.clear();
   }
 };
 
