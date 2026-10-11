@@ -144,6 +144,8 @@ static void clearRenderedBounds(const SvgNode* node)
 // Also ... can we come up w/ a better naming convention than draw() / _draw()?
 void SvgPainter::draw(const SvgNode* node)
 {
+  if(skipNode && skipNode(node))
+    return;
   Rect bbox;
   if(!insideUse) {
     bbox = node->bounds();
@@ -497,6 +499,7 @@ void SvgPainter::_draw(const SvgImage* node)
 }
 
 bool SvgPainter::cullSubpaths = true;
+bool (*SvgPainter::skipNode)(const SvgNode* node) = NULL;
 
 // Drop the subpaths of `path` whose control point bounds miss `keep`, copying the rest to `out`; false (and
 //  `out` untouched) if nothing would be dropped.  Exact for drawing clipped to `keep`: a closed subpath winds
