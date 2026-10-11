@@ -42,6 +42,9 @@ public:
   static Rect calcDirtyRect(const SvgNode* node);
   // false draws every subpath of a many-subpath path whatever the dirty rect (tests compare against it)
   static bool cullSubpaths;
+  // when set, draw() leaves out every node it returns true for (and its subtree), without touching the
+  //  node's rendered bounds; for an application drawing its document without some nodes for a while
+  static bool (*skipNode)(const SvgNode* node);
   static void clearDirty(const SvgNode* node);
 
 private:
