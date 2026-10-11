@@ -382,7 +382,8 @@ static size_t maxPathDataLen(const Path2D& m_path)
   return m_path.size()*MAX_CHARS_PER_POINT + MIN_PATHD_STR_LEN;
 }
 
-static const char* serializePathData(char* buff, const Path2D& m_path, int prec, bool relative = true)
+// returns the end of the data written (where its '\0' is)
+static char* serializePathData(char* buff, const Path2D& m_path, int prec, bool relative = true)
 {
   char* ts = buff;
   Path2D::PathCommand prevcmd = Path2D::MoveTo;
@@ -437,8 +438,8 @@ static const char* serializePathData(char* buff, const Path2D& m_path, int prec,
       prevpt = pt;
     prevcmd = cmd;
   }
-  *ts++ = '\0';
-  return buff;
+  *ts = '\0';
+  return ts;
 }
 
 void SvgWriter::_serialize(SvgPath* node)
@@ -470,7 +471,8 @@ void SvgWriter::_serialize(SvgPath* node)
   xml.writeStartElement("path");
   serializeNodeAttr(node);
   char* buff = xml.getTemp(maxPathDataLen(node->m_path));
-  xml.writeAttribute("d", serializePathData(buff, node->m_path, xml.defaultFloatPrecision, pathDataRel));
+  char* end = serializePathData(buff, node->m_path, xml.defaultFloatPrecision, pathDataRel);
+  xml.writeAttributeRaw("d", buff, end - buff);  // nothing in path data needs escaping
   xml.writeEndElement();
 }
 
@@ -554,7 +556,8 @@ void SvgWriter::_serialize(SvgFont* node)
     if(glyph->m_horizAdvX >= 0) xml.writeAttribute("horiz-adv-x", glyph->m_horizAdvX);
     serializeNodeAttr(glyph);
     char* buff = xml.getTemp(maxPathDataLen(glyph->m_path));
-    xml.writeAttribute("d", serializePathData(buff, glyph->m_path, xml.defaultFloatPrecision, pathDataRel));
+    char* end = serializePathData(buff, glyph->m_path, xml.defaultFloatPrecision, pathDataRel);
+    xml.writeAttributeRaw("d", buff, end - buff);
     xml.writeEndElement();
   }
   for(const SvgFont::Kerning& k : node->m_kerning) {

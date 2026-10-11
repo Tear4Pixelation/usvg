@@ -198,16 +198,33 @@ public:
 
     char* buff = temp.data();
     int ii = realToStr(buff, value, precision < 0 ? defaultFloatPrecision : precision);
-    buff[ii] = '\0';
-    return writeAttribute(name, buff);
+    return writeAttributeRaw(name, buff, ii);
   }
 
   XmlStreamWriter& writeAttribute(const char* name, int value)
   {
     char* buff = temp.data();
     int ii = intToStr(buff, value);
-    buff[ii] = '\0';
-    return writeAttribute(name, buff);
+    return writeAttributeRaw(name, buff, ii);
+  }
+
+  // a value with nothing to escape - a number, path data (digits, '-', '.', ' ', letters) - appended as it is;
+  //  writes exactly what writeAttribute(name, value) writes for such a value, without the escape scan
+  XmlStreamWriter& writeAttributeRaw(const char* name, const char* value, size_t len)
+  {
+    if(writeStyleAttr) {
+      styleAttr.append(name); styleAttr.push_back(':'); styleAttr.append(value, len); styleAttr.push_back(';');
+    }
+    else {
+      ASSERT(tagOpen && "XmlStreamWriter: attribute written after the element's first child");
+      if(!tagOpen) return *this;
+      buf.push_back(' ');
+      buf.append(name);
+      buf.append("=\"");
+      buf.append(value, len);
+      buf.push_back('"');
+    }
+    return *this;
   }
 
   XmlStreamWriter& writeCharacters(const char* text)
