@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstring>
 #include <memory>
 #include <list>
 #include <unordered_map>
@@ -185,6 +186,7 @@ public:
   // attributes
   void setAttribute(const char* name, const char* value, SvgAttr::Src src = SvgAttr::XMLSrc);
   void setAttr(const SvgAttr& attr);
+  void setAttr(SvgAttr&& attr);
   template<typename T>
   void setAttr(const char* name, T val, SvgAttr::Src src = SvgAttr::XMLSrc)
     { setAttr(SvgAttr( name, val, src | SvgAttr::nameToStdAttr(name) )); }
@@ -225,7 +227,7 @@ public:
 protected:
   SvgNode(const SvgNode&);
 
-  bool setAttrHelper(const SvgAttr& attr);
+  template<class Attr> bool setAttrHelper(Attr&& attr);
   void onAttrChange(const char* name, SvgAttr::StdAttr stdattr);
 };
 
@@ -449,6 +451,18 @@ public:
   std::string m_linkStr;
 
   Rect srcRect;
+
+  // what SvgWriter last wrote for this image when it had to crop or rescale it (savePicScaled): decoding,
+  //  resampling and re-encoding a big JPEG took seconds per save.  Valid while the key matches - the
+  //  pixels (Image::contentId), the crop and the scaled size; the bytes are exactly what it would write.
+  struct SaveCache {
+    uint64_t contentId = 0;
+    Rect srcRect;
+    int width = 0, height = 0;  // -1: not scaled
+    Image::Encoding fmt = Image::UNKNOWN;
+    Image::EncodeBuff data;
+  };
+  mutable SaveCache saveCache;
 };
 
 class SvgPath : public SvgNode
@@ -525,7 +539,12 @@ public:
   void addText(const char* text);
   bool isLineBreak() const { return m_text == "\n"; }
   void clearText();
-  void setText(const char* text) { clearText(); addText(text); }
+  // a single-run text already holding exactly this is left alone: rewriting it only invalidates (UI labels
+  //  are re-set to the same string on every refresh).  Multi-run or multi-line text takes the full path.
+  void setText(const char* text) {
+    if(tspans().empty() && m_text == text && !strchr(text, '\n')) return;
+    clearText(); addText(text);
+  }
   std::string text() const;
   std::string displayText() const;
   bool isTspan() const { return m_isTspan; }
