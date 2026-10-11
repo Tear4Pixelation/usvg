@@ -440,8 +440,10 @@ void SvgNode::removeAttr(const char* name, int src)
 
 const SvgAttr* SvgNode::getAttr(const char* name, int src) const
 {
+  // first character compared before strcmp(): same result, without a library call for most attributes
   for(auto it = attrs.rbegin(); it != attrs.rend(); ++it) {
-    if(it->nameIs(name) && (it->src() & src))
+    const char* attrname = it->name();
+    if(attrname[0] == name[0] && strcmp(attrname, name) == 0 && (it->src() & src))
       return &*it;
   }
   return NULL;
