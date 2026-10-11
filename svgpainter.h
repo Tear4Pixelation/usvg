@@ -40,6 +40,8 @@ public:
   static std::string breakText(const SvgText* node, real maxWidth);
   static void elideText(SvgText* textnode, real maxWidth);
   static Rect calcDirtyRect(const SvgNode* node);
+  // false draws every subpath of a many-subpath path whatever the dirty rect (tests compare against it)
+  static bool cullSubpaths;
   static void clearDirty(const SvgNode* node);
 
 private:

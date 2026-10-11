@@ -496,12 +496,89 @@ void SvgPainter::_draw(const SvgImage* node)
   p->drawImage(node->viewport(), node->m_image, node->srcRect);
 }
 
+bool SvgPainter::cullSubpaths = true;
+
+// Drop the subpaths of `path` whose control point bounds miss `keep`, copying the rest to `out`; false (and
+//  `out` untouched) if nothing would be dropped.  Exact for drawing clipped to `keep`: a closed subpath winds
+//  zero everywhere outside its bounds, so for fills the pixels inside are unchanged, and the caller pads
+//  `keep` by the stroke's reach for strokes.  An arc (ArcTo: center, radii, angles) is bounded by its ellipse.
+static bool cullPathSubpaths(const Path2D& path, const Rect& keep, Path2D& out)
+{
+  size_t n = path.points.size();
+  if(path.commands.size() != n)
+    return false;
+  std::vector<std::pair<size_t, size_t>> kept;
+  size_t start = 0, npts = 0;
+  while(start < n) {
+    size_t end = start + 1;
+    while(end < n && path.commands[end] != Path2D::MoveTo)
+      ++end;
+    real x0 = REAL_MAX, y0 = REAL_MAX, x1 = -REAL_MAX, y1 = -REAL_MAX;
+    for(size_t ii = start; ii < end; ++ii) {
+      Point pt = path.points[ii];
+      if(path.commands[ii] == Path2D::ArcTo && ii + 1 < end) {
+        Point r = path.points[ii + 1];
+        x0 = std::min(x0, pt.x - std::abs(r.x));  x1 = std::max(x1, pt.x + std::abs(r.x));
+        y0 = std::min(y0, pt.y - std::abs(r.y));  y1 = std::max(y1, pt.y + std::abs(r.y));
+        ii += 2;  // skip radii and angles
+      }
+      else {
+        x0 = std::min(x0, pt.x);  x1 = std::max(x1, pt.x);
+        y0 = std::min(y0, pt.y);  y1 = std::max(y1, pt.y);
+      }
+    }
+    if(!(x1 < keep.left || x0 > keep.right || y1 < keep.top || y0 > keep.bottom)) {
+      kept.emplace_back(start, end);
+      npts += end - start;
+    }
+    start = end;
+  }
+  if(npts == n)
+    return false;
+  out.clear();
+  out.reserve(npts, true);
+  out.fillRule = path.fillRule;
+  for(const auto& range : kept) {
+    out.points.insert(out.points.end(), path.points.begin() + range.first, path.points.begin() + range.second);
+    out.commands.insert(out.commands.end(), path.commands.begin() + range.first, path.commands.begin() + range.second);
+  }
+  return true;
+}
+
 void SvgPainter::_draw(const SvgPath* node)
 {
-  const Path2D& m_path = node->m_path;
-  if(m_path.empty())
+  const Path2D& m_path0 = node->m_path;
+  if(m_path0.empty())
     return;
   ExtraState& state = extraState();
+  const_cast<Path2D&>(m_path0).setFillRule(state.fillRule);  // before cullSubpaths() copies it
+  // A path of many subpaths reaching well past what is being drawn - dotted paper is one path of all its
+  //  dots (page.cpp) - is drawn with only the subpaths near the dirty rect: otherwise every dot on the page
+  //  is tessellated for, say, a stroke's dirty rect.  Not with dashes (the dash phase runs across subpaths),
+  //  patterns, or inside <use> (dirtyRect is not in node coordinates there).
+  Path2D culledPath;
+  const Path2D* drawnPath = &m_path0;
+  if(cullSubpaths && m_path0.size() >= 64 && !m_path0.isSimple() && !insideUse && !state.dashServer && dirtyRect.isValid()
+      && !(state.fillServer && state.fillServer->type() == SvgNode::PATTERN)
+      && !(state.strokeServer && state.strokeServer->type() == SvgNode::PATTERN)
+      && !dirtyRect.contains(node->bounds())
+      // only paths of several subpaths (a stroke is one): finding a second MoveTo is a cheap scan
+      && std::find(m_path0.commands.begin() + 1, m_path0.commands.end(), Path2D::MoveTo) != m_path0.commands.end()) {
+    Transform2D tf = p->getTransform();
+    real s = std::sqrt(std::abs(tf.m[0]*tf.m[3] - tf.m[1]*tf.m[2]));
+    if(s > 0) {
+      // dirtyRect is in drawNode()'s coordinates: through the device into this node's
+      Rect keep = tf.inverse().mapRect(initialTransform.mapRect(dirtyRect));
+      // stroke reach (miter joins, square caps) plus a couple of device pixels for antialiasing
+      real hw = p->strokeBrush().isNone() ? 0 : p->strokeWidth()/2;
+      if(p->vectorEffect() == Painter::NonScalingStroke)
+        hw /= s;
+      keep.pad(hw*std::max(real(2), p->miterLimit()) + 2/s);
+      if(cullPathSubpaths(m_path0, keep, culledPath))
+        drawnPath = &culledPath;
+    }
+  }
+  const Path2D& m_path = *drawnPath;
   const_cast<Path2D&>(m_path).setFillRule(state.fillRule);
   real oldOpacity = p->opacity();
   // we cannot use array stored in SvgAttr directly since it may not be aligned on 4-byte boundary (crashes on
