@@ -23,6 +23,9 @@ public:
   static bool DEBUG_CSS_STYLE;
   static bool DEFAULT_PATH_DATA_REL;
   static float DEFAULT_SAVE_IMAGE_SCALED;
+  // images with this class are never resampled by saveImageScaled (e.g. page backgrounds rendered at a
+  //  resolution the user chose); NULL: none exempt
+  static const char* NO_RESAMPLE_CLASS;
   static int SVG_FLOAT_PRECISION;
 
   static void save(SvgNode* node, IOStream& strm, const char* indent = "  ");

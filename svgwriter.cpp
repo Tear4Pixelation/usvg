@@ -7,6 +7,7 @@
 bool SvgWriter::DEBUG_CSS_STYLE = false;
 bool SvgWriter::DEFAULT_PATH_DATA_REL = true;
 float SvgWriter::DEFAULT_SAVE_IMAGE_SCALED = 0;
+const char* SvgWriter::NO_RESAMPLE_CLASS = NULL;
 int SvgWriter::SVG_FLOAT_PRECISION = 3;
 
 char* SvgWriter::serializeColor(char* buff, const Color& color)
@@ -325,7 +326,8 @@ void SvgWriter::_serialize(SvgImage* node)
     int scaledh = int(saveImageScaled*tf_bounds.height() + 0.5);
     // shrink image to save space if sufficient size change (and new size is not tiny)
     bool scaleimg = saveImageScaled > 0 && tf_bounds.width() > 10 && tf_bounds.height() > 10
-        && (scaledw < 0.75*imgw || scaledh < 0.75*imgh);
+        && (scaledw < 0.75*imgw || scaledh < 0.75*imgh)
+        && !(NO_RESAMPLE_CLASS && node->hasClass(NO_RESAMPLE_CLASS));
     Image::Encoding fmt;
     Image::EncodeBuff buff;
     // a crop or a rescale makes new pixels to encode: reuse the last save's bytes if nothing has changed
